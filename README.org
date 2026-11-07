@@ -1,0 +1,90 @@
+#+title: android-usage.el — Android screen time in Org
+
+Pull Android's *Usage Access* data (the same per-app usage the system
+gives StayFree) into a plain Org file: one table per day, a
+StayFree-style top-apps report, and a =#+BEGIN: android-usage=
+dynamic block.  Everything stays on the device.
+
+* The bridge, honestly
+
+Emacs on Android (29 through 31, =feature/android= included) has *no
+Java interop*: there is no =android-call-method= anywhere in stock
+Emacs, so Elisp cannot call =UsageStatsManager= directly.  Android
+only exposes that data to apps holding the special "Usage access"
+permission.  So one export step is needed: an app that holds Usage
+access writes a CSV/JSON file; this package pulls it into Org.
+
+StayFree's own export works today: StayFree → Settings → Backup →
+Export CSV.  Export to =Download/=, import once, then delete StayFree.
+
+* Quickstart (Emacs Android, org.gnu.emacs or Termux)
+
+1. In your usage app (e.g. StayFree), export CSV to =Download/=.
+2. Give Emacs read access: Android Settings → Apps → Emacs →
+   Permissions → Files and media → Allow management of all files.
+3. =M-x android-usage-import= — pick the export file, or just
+   =M-x android-usage-refresh= (grabs the newest usable export).
+4. =M-x android-usage-report= for the last-7-days top list, or drop
+   this into any Org file and press =C-c C-c= on it:
+
+#+begin_src org
+,#+BEGIN: android-usage :days 7 :top 15
+,#+END:
+#+end_src
+
+5. =M-x android-usage-mode= turns on hourly auto-pulls.
+
+* What lands in Org
+
+The journal is =android-usage.org= in =org-directory= (customizable,
+=~android-usage-org-file=).  One heading per day, rewritten
+idempotently on every import — re-importing never duplicates:
+
+#+begin_example
+,* 2026-11-07 Sat
+| App      | Package            | Time | Opens |
+|----------+--------------------+------+-------|
+| WhatsApp | org.whatsapp       | 2:15 |    31 |
+| GNU Emacs| org.gnu.emacs      | 1:40 |    12 |
+|----------+--------------------+------+-------|
+| Total    |                    | 3:55 |    43 |
+#+end_example
+
+The dynamic block reads those tables and renders the top apps over a
+range.  =android-usage-ignore-packages= drops noise (System UI by
+default; launchers stay — StayFree counts them as "Home").
+
+* Import formats
+
+CSV is detected by header: date, app label/package, duration,
+opens.  Durations accept =H:MM:SS=, =H:MM=, =1h 23m=, bare seconds,
+or milliseconds (auto-sniffed per file; pin with
+=android-usage-duration-unit=).  Files without a date column take the
+day from the file name (e.g. =stayfree-2026-11-06.csv=).
+
+JSON (canonical, for integrators and future exporters):
+
+#+begin_example
+{"days": [{"date": "2026-11-06",
+           "apps": [{"package": "org.whatsapp", "label": "WhatsApp",
+                     "seconds": 8100, "opens": 31}]}]}
+#+end_example
+
+Weird exports: force column order with =android-usage-column-map=.
+
+* Going exporter-free
+
+Set =android-usage-pull-function= to anything: a Termux =adb= helper,
+an HTTP fetch from a companion exporter, or a scheduled Tasker/Automate
+flow writing the canonical JSON above.  The function just writes day
+snapshots via =android-usage--write-day=.
+
+Pair with =actlog.el= (in-Emacs hours per project/buffer) for the
+other half of StayFree: what the phone did, and where the Emacs part
+of it went.
+
+* Development
+
+=make compile= (byte-compile, warnings as errors) and =make test=
+(ERT) are clean on Emacs 30.1.  The package is Android-compatible by
+construction: no JNI, no subprocesses, no external dependencies.
