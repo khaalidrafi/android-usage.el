@@ -24,15 +24,20 @@ Export CSV.  Export to =Download/=, import once, then delete StayFree.
    Permissions → Files and media → Allow management of all files.
 3. =M-x android-usage-import= — pick the export file, or just
    =M-x android-usage-refresh= (grabs the newest usable export).
-4. =M-x android-usage-report= for the last-7-days top list, or drop
-   this into any Org file and press =C-c C-c= on it:
+4. =M-x android-usage-report= for the last-7-days report (table +
+   charts), or drop this into any Org file and press =C-c C-c= on it:
 
 #+begin_src org
-,#+BEGIN: android-usage :days 7 :top 15
+,#+BEGIN: android-usage :days 7 :top 15 :chart t
 ,#+END:
 #+end_src
 
+   For a single day: =#+BEGIN: android-usage-day :date "2026-11-07"
+   :top 10 :chart t= (or =M-x android-usage-insert-day-block=).
+
 5. =M-x android-usage-mode= turns on hourly auto-pulls.
+6. =M-x android-usage-setup-capture= adds an org-capture template
+   (=au=) that snapshots today's total + top 3 into your notes.
 
 * What lands in Org
 
@@ -53,6 +58,30 @@ idempotently on every import — re-importing never duplicates:
 The dynamic block reads those tables and renders the top apps over a
 range.  =android-usage-ignore-packages= drops noise (System UI by
 default; launchers stay — StayFree counts them as "Home").
+
+* Charts
+
+Both dynamic blocks append SVG charts when =:chart t= (the default;
+silence with =:chart nil=):
+
+- =charts/usage-trend-<N>d.svg= — screen time per day, one bar per
+  day (the StayFree daily-totals graph).
+- =charts/usage-top-day.svg= — top apps of the last day with data,
+  horizontal bars, StayFree order.
+
+Charts are generated in pure Elisp (no gnuplot, no ImageMagick),
+written next to the journal, and linked as Org =file:= links — open
+the journal and press =C-c C-x C-v= to see them inline (needs an
+Emacs build with SVG image support; any browser opens them too).
+Colors: =android-usage-chart-bar-color=, =android-usage-chart-text-color=.
+
+* Capture
+
+=M-x android-usage-setup-capture= installs an org-capture template
+(customizable via =android-usage-capture-template=): a one-line
+snapshot — total screen time plus top 3 apps — into
+=android-usage-snapshots.org=, so daily notes and usage data live in
+the same Org world.
 
 * Import formats
 

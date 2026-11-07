@@ -22,6 +22,30 @@
 9. Unused lexical variable (=any-opens=) — fatal under
    =byte-compile-error-on-warn=.
 
+* v0.2 — Org reports + charts (2026-11-07)
+
+Owner order #hq 2026-11-07 ~08:14Z: tracker MUST report activities in
+Org, with graphs/charts.
+
+Added, to review:
+
+- TODO Review =android-usage--svg-hbars= / =--svg-vbars=: hand-rolled
+  SVG generation. Checked via cairosvg render (labels/titles fit after
+  the 9px/char + title-width fix), but eyeball the two sample charts
+  in =scripts/au_smoke.sh= output on your device.
+- TODO Review the =:chart t= dblock default: charts are written to
+  =charts/= BESIDE THE JOURNAL on every dblock update — confirm you
+  want those files inside =org-directory= (sync-friendly, but they
+  multiply in git/sync if you version the org dir).
+- TODO Review =android-usage--range-table= label fix (v0.1 shipped
+  package-into-App-column + Opens twice; regression test added).
+- TODO =android-usage-setup-capture= + template: confirm the
+  snapshots file location (=org-directory/android-usage-snapshots.org=).
+
+Certification (v0.2): emacs 30.1, byte-compile 0 errors/warnings,
+ERT 39/39, smoke =scripts/au_smoke.sh= renders both charts (XML-valid,
+visually checked). CI workflow added (emacs 30.1 gate).
+
 * G2 ring lane — REVIEW-INCOMPLETE (honest record)
 
 Three ring-lane attempts on 2026-11-07, all through the Owner-ordered

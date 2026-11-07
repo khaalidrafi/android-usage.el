@@ -2,7 +2,7 @@
 
 ;; Author: GLM-5.3-Flash <glm-5.3-flash@z.ai>
 ;; Maintainer: Khalid Rafi <khaalidrafi@gmail.com>
-;; Version: 0.1
+;; Version: 0.2
 ;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: org, android, convenience, tools
 ;; URL: https://github.com/khaalidrafi/android-usage.el
@@ -35,10 +35,14 @@
 ;;   |---------------+----------------+------+-------|
 ;;   | WhatsApp      | org.whatsapp   | 2:15 |    31 |
 ;;
-;; A dynamic block `#+BEGIN: android-usage :days 7 :top 15' renders
-;; the StayFree-style top list over any range; `M-x
-;; android-usage-report' shows it instantly.  Day tables are rewritten
-;; idempotently, so re-importing the same export never duplicates.
+;; A dynamic block `#+BEGIN: android-usage :days 7 :top 15 :chart t'
+;; renders the StayFree-style top list over any range PLUS two SVG
+;; charts (per-day totals trend, top apps of the last day) generated
+;; in pure Elisp -- no gnuplot, no ImageMagick, works on Emacs
+;; Android.  `M-x android-usage-report' shows it instantly, and
+;; `M-x android-usage-setup-capture' adds an org-capture template for
+;; daily usage snapshots.  Day tables are rewritten idempotently, so
+;; re-importing the same export never duplicates.
 ;;
 ;; Together with `actlog' (in-Emacs hours per project/buffer) this
 ;; covers both halves of StayFree: what the phone did, and where the
@@ -600,9 +604,12 @@ Parsed from the journal file's per-day tables."
                 total-opens (+ total-opens (car (cddr cell)))
                 count (1+ count))
           (push (format "| %s | %s | %s | %d |"
-                        (car cell) (caddr cell)
+                        ;; cell = (PKG SECS OPENS LABEL); label column
+                        ;; falls back to the package when no label seen.
+                        (or (cadddr cell) (car cell))
+                        (car cell)
                         (android-usage--fmt-dur (cadr cell))
-                        (car (cddr cell)))
+                        (caddr cell))
                 lines)))
       (concat (format "#+name: android-usage-range\n") 
               "| App | Package | Time | Opens |\n"
@@ -617,22 +624,280 @@ Parsed from the journal file's per-day tables."
                       (android-usage--fmt-dur total) total-opens)))))
 
 ;;; ------------------------------------------------------------------------
+;;; Charts (pure-Elisp SVG -- no gnuplot, no ImageMagick, Android-safe)
+;;; ------------------------------------------------------------------------
+
+(defcustom android-usage-chart-bar-color "#3a6ea5"
+  "Fill color of chart bars (any SVG/CSS color)."
+  :type 'color
+  :group 'android-usage)
+
+(defcustom android-usage-chart-text-color "#333333"
+  "Text color used inside charts."
+  :type 'color
+  :group 'android-usage)
+
+(defun android-usage--xml-escape (s)
+  "Escape S for safe inclusion in SVG text content."
+  (replace-regexp-in-string
+   "[&<>\"']"
+   (lambda (c)
+     (cdr (assq (aref c 0)
+                '((?& . "&amp;") (?< . "&lt;") (?> . "&gt;")
+                  (?\" . "&quot;") (?' . "&apos;")))))
+   s))
+
+(defconst android-usage--svg-nodata
+  (concat "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"360\" height=\"56\""
+          " font-family=\"sans-serif\" font-size=\"13\">"
+          "<rect x=\"0\" y=\"0\" width=\"360\" height=\"56\" fill=\"#ffffff\"/>"
+          "<text x=\"10\" y=\"34\" fill=\"#888888\">no usage data</text></svg>\n")
+  "Placeholder chart shown when the journal has no rows.")
+
+(defun android-usage--svg-hbars (rows &optional title)
+  "Render ROWS ((LABEL . SECS)...) as a horizontal bar chart SVG string.
+Shows at most 20 bars, longest first as given; TITLE drawn on top.
+Pure string generation -- renderable by any SVG-capable Emacs or
+browser, and trivially unit-testable."
+  (if (null rows)
+      android-usage--svg-nodata
+    (let* ((rows (seq-take rows 20))
+           (rowh 26) (barh 16) (fs 13) (barw 360)
+           (namew (min 260
+                       (max 70
+                            ;; ~9px/char at font-size 13, plus padding:
+                            ;; too tight clips the first glyph (seen with
+                            ;; "GNU Emacs" in cairosvg render, 2026-11-07).
+                            (+ 12 (* 9 (1+ (apply #'max
+                                                  (mapcar (lambda (r)
+                                                            (length (car r)))
+                                                          rows))))))))
+           (maxv (apply #'max 1 (mapcar #'cdr rows)))
+           (w (max (+ 10 namew 6 barw 66)
+                   (if title (+ 16 (* 8 (length title))) 0)))
+           (h (+ 30 (* rowh (length rows)) 6))
+           (tc android-usage-chart-text-color)
+           (bc android-usage-chart-bar-color))
+      (concat
+       (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\" font-family=\"sans-serif\" font-size=\"%d\">\n"
+               w h w h fs)
+       (format "<rect x=\"0\" y=\"0\" width=\"%d\" height=\"%d\" fill=\"#ffffff\"/>\n" w h)
+       (when title
+         (format "<text x=\"10\" y=\"18\" fill=\"%s\" font-weight=\"bold\">%s</text>\n"
+                 tc (android-usage--xml-escape title)))
+       (let ((y 26) (out nil))
+         (dolist (r rows)
+           (let* ((label (car r)) (secs (cdr r))
+                  (bw (max 1 (round (* (/ (float secs) maxv) barw))))
+                  (tx (- namew 4)))
+             (push (format "<text x=\"%d\" y=\"%d\" text-anchor=\"end\" fill=\"%s\">%s</text>\n"
+                           tx (+ y barh -2) tc (android-usage--xml-escape label))
+                   out)
+             (push (format "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"%s\" rx=\"2\"/>\n"
+                           (+ namew 6) y bw barh bc)
+                   out)
+             (push (format "<text x=\"%d\" y=\"%d\" fill=\"%s\">%s</text>\n"
+                           (+ namew 6 barw 8) (+ y barh -2) tc
+                           (android-usage--fmt-dur secs))
+                   out))
+           (setq y (+ y rowh)))
+         (apply #'concat (nreverse out)))
+       "</svg>\n"))))
+
+(defun android-usage--svg-vbars (rows &optional title)
+  "Render ROWS ((DAY . SECS)...) as a vertical bar chart SVG string.
+One bar per DAY (labeled MM-DD), value in H:MM on top of each bar."
+  (if (null rows)
+      android-usage--svg-nodata
+    (let* ((n (length rows))
+           (colw 58) (barw 36) (fs 12)
+           (plot-h 150) (val-h 18) (top 28) (label-h 22)
+           (maxv (apply #'max 1 (mapcar #'cdr rows)))
+           ;; widen for long titles so they never clip on the right
+           (w (max (+ 20 (* colw n))
+                   (if title (+ 16 (* 8 (length title))) 0)))
+           (h (+ top val-h plot-h label-h))
+           (tc android-usage-chart-text-color)
+           (bc android-usage-chart-bar-color))
+      (concat
+       (format "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" viewBox=\"0 0 %d %d\" font-family=\"sans-serif\" font-size=\"%d\">\n"
+               w h w h fs)
+       (format "<rect x=\"0\" y=\"0\" width=\"%d\" height=\"%d\" fill=\"#ffffff\"/>\n" w h)
+       (when title
+         (format "<text x=\"10\" y=\"18\" fill=\"%s\" font-weight=\"bold\">%s</text>\n"
+                 tc (android-usage--xml-escape title)))
+       (let ((i 0) (out nil))
+         (dolist (r rows)
+           (let* ((day (car r)) (secs (cdr r))
+                  (bh (max 1 (round (* (/ (float secs) maxv) plot-h))))
+                  (bx (+ 20 (* i colw) (/ (- colw barw) 2)))
+                  (by (+ top val-h (- plot-h bh)))
+                  (cx (+ 20 (* i colw) (/ colw 2))))
+             (push (format "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"%s\" rx=\"2\"/>\n"
+                           bx by barw bh bc)
+                   out)
+             (push (format "<text x=\"%d\" y=\"%d\" text-anchor=\"middle\" fill=\"%s\">%s</text>\n"
+                           cx (- by 4) tc (android-usage--fmt-dur secs))
+                   out)
+             (push (format "<text x=\"%d\" y=\"%d\" text-anchor=\"middle\" fill=\"%s\">%s</text>\n"
+                           cx (+ top val-h plot-h 16) tc
+                           (android-usage--xml-escape
+                            (if (> (length day) 5) (substring day 5) day)))
+                   out))
+           (setq i (1+ i)))
+         (apply #'concat (nreverse out)))
+       "</svg>\n"))))
+
+(defun android-usage--range-day-totals (days)
+  "Return ascending ((DAY . SECS)...) totals for the last DAYS days."
+  (let* ((day-list (android-usage--read-day-tables))
+         (cutoff-day (android-usage--day-string
+                      (float-time (time-subtract
+                                   (current-time)
+                                   (days-to-time (1- days)))))))
+    (sort (cl-loop for (day . rows) in day-list
+                   when (not (string< day cutoff-day))
+                   collect (cons day
+                                 (apply #'+
+                                        (mapcar (lambda (r) (nth 2 r))
+                                                rows))))
+          (lambda (a b) (string< (car a) (car b))))))
+
+(defun android-usage--day-rows (day)
+  "Journal rows ((LABEL PACKAGE SECS OPENS)...) for DAY, or nil."
+  (alist-get day (android-usage--read-day-tables) nil nil #'equal))
+
+(defun android-usage--day-top (day &optional top)
+  "((LABEL . SECS)...) of the TOP apps on DAY, longest use first.
+DAY nil (or a day without data) falls back to the last day that has
+data; nil when the whole journal is empty."
+  (let* ((day-list (android-usage--read-day-tables))
+         (rows (or (and day (alist-get day day-list nil nil #'equal))
+                   (cdr (car (last day-list))))))
+    (when rows
+      (seq-take (cl-sort (mapcar (lambda (r) (cons (car r) (nth 2 r))) rows)
+                         #'> :key #'cdr)
+                (or top 10)))))
+
+(defun android-usage-chart-dir ()
+  "Directory chart SVGs are written to (beside the journal file)."
+  (expand-file-name "charts" (file-name-directory (android-usage-org-file-path))))
+
+(defun android-usage--write-chart (name svg)
+  "Write SVG as NAME under `android-usage-chart-dir'.
+Returns the Org file link target relative to the journal file."
+  (let* ((dir (android-usage-chart-dir))
+         (file (expand-file-name name dir)))
+    (make-directory dir t)
+    (with-temp-file file (insert svg))
+    (concat "charts/" name)))
+
+(defun android-usage--chart-links (days)
+  "Write and link this range's two charts (trend + last-day top apps).
+DAYS is the range length used for the trend chart's file name."
+  (let* ((trend (android-usage--write-chart
+                 (format "usage-trend-%dd.svg" days)
+                 (android-usage--svg-vbars
+                  (android-usage--range-day-totals days)
+                  (format "Screen time per day, last %d days" days))))
+         (last-day (car (car (last (android-usage--read-day-tables)))))
+         (top (android-usage--write-chart
+               "usage-top-day.svg"
+               (android-usage--svg-hbars
+                (android-usage--day-top last-day 10)
+                (format "Top apps, %s" (or last-day "no data"))))))
+    (concat "#+caption: Screen time per day\n"
+            "[[file:" trend "]]\n"
+            "#+caption: Top apps, " (or last-day "no data") "\n"
+            "[[file:" top "]]\n")))
+
+(defun android-usage--day-table-org (rows)
+  "Render journal ROWS ((LABEL PACKAGE SECS OPENS)...) as an Org table,
+sorted by time, descending, with a total row."
+  (let* ((rows (cl-sort (copy-sequence rows) #'> :key (lambda (r) (nth 2 r))))
+         (total 0) (total-opens 0) (lines nil))
+    (dolist (r rows)
+      (setq total (+ total (nth 2 r)) total-opens (+ total-opens (nth 3 r)))
+      (push (format "| %s | %s | %s | %d |"
+                    (nth 0 r) (nth 1 r)
+                    (android-usage--fmt-dur (nth 2 r)) (nth 3 r))
+            lines))
+    (concat "| App | Package | Time | Opens |\n"
+            "|-" (make-string 18 ?-) "+-" (make-string 24 ?-)
+            "+-" (make-string 6 ?-) "+-" (make-string 5 ?-) "-|\n"
+            (mapconcat #'identity (nreverse lines) "\n")
+            "\n"
+            "|-" (make-string 18 ?-) "+-" (make-string 24 ?-)
+            "+-" (make-string 6 ?-) "+-" (make-string 5 ?-) "-|\n"
+            (format "| Total | | %s | %d |\n"
+                    (android-usage--fmt-dur total) total-opens))))
+
+;;; ------------------------------------------------------------------------
 ;;; Dynamic block
 ;;; ------------------------------------------------------------------------
 
 ;;;###autoload
 (defun org-dblock-write:android-usage (params)
   "Writer for `#+BEGIN: android-usage' dynamic blocks.
-PARAMS: :days (default 7) :top (default 15)."
-  (let ((days (or (plist-get params :days) 7))
-        (top (or (plist-get params :top) 15)))
-    (insert (android-usage--range-table days top))))
+PARAMS: :days (default 7), :top (default 15), :chart (default t --
+append per-day trend + top-apps chart links after the table)."
+  (let* ((days (or (plist-get params :days) 7))
+         (top (or (plist-get params :top) 15))
+         (chart (if (plist-member params :chart)
+                    (plist-get params :chart)
+                  t)))
+    (insert (android-usage--range-table days top))
+    (when chart
+      (insert "\n" (android-usage--chart-links days)))
+    (when (and chart (fboundp 'org-display-inline-images))
+      (ignore-errors (org-display-inline-images nil t
+                                                (point-min) (point-max))))))
+
+;;;###autoload
+(defun org-dblock-write:android-usage-day (params)
+  "Writer for `#+BEGIN: android-usage-day' dynamic blocks (one day).
+PARAMS: :date (default: last day with data), :top (default 10),
+:chart (default t -- bar chart of that day's top apps)."
+  (let* ((date (or (plist-get params :date)
+                   (car (car (last (android-usage--read-day-tables))))))
+         (top (or (plist-get params :top) 10))
+         (chart (if (plist-member params :chart)
+                    (plist-get params :chart)
+                  t))
+         (rows (android-usage--day-rows date)))
+    (insert (format "*%s*\n\n" (or date "no data"))
+            (if rows
+                (android-usage--day-table-org rows)
+              "No usage data for this day.\n"))
+    (when chart
+      (let ((link (and date
+                       (android-usage--write-chart
+                        "usage-top-day.svg"
+                        (android-usage--svg-hbars
+                         (android-usage--day-top date top)
+                         (format "Top apps, %s" date))))))
+        (when link
+          (insert "\n#+caption: Top apps, " date "\n"
+                  "[[file:" link "]]\n"))))
+    (when (and chart (fboundp 'org-display-inline-images))
+      (ignore-errors (org-display-inline-images nil t
+                                                (point-min) (point-max))))))
 
 ;;;###autoload
 (defun android-usage-insert-block (&optional days top)
   "Insert an `android-usage' dynamic block for DAYS/TOP at point."
   (interactive (list (read-number "Days: " 7) (read-number "Top apps: " 15)))
   (insert (format "#+BEGIN: android-usage :days %d :top %d\n" days top)
+          "#+END:\n")
+  (when (derived-mode-p 'org-mode)
+    (org-update-dblock)))
+
+;;;###autoload
+(defun android-usage-insert-day-block (&optional date)
+  "Insert an `android-usage-day' dynamic block for DATE at point."
+  (interactive (list (read-string "Day (YYYY-MM-DD): "
+                                  (android-usage--day-string))))
+  (insert (format "#+BEGIN: android-usage-day :date \"%s\"\n" date)
           "#+END:\n")
   (when (derived-mode-p 'org-mode)
     (org-update-dblock)))
@@ -759,20 +1024,54 @@ Returns the list of day strings written."
 
 ;;;###autoload
 (defun android-usage-report (&optional days)
-  "Show a StayFree-style top-apps report for the last DAYS (7)."
+  "Show a StayFree-style report for the last DAYS (7): top-apps\ntable, per-day trend chart, last-day top-apps chart."
   (interactive (list (read-number "Days: " 7)))
   (require 'org nil t)
   (let* ((days (or days 7))
-         (table (android-usage--range-table days 15))
          (buffer (get-buffer-create "*Android Usage*")))
     (with-current-buffer buffer
       (let ((inhibit-read-only t))
         (erase-buffer)
         (if (fboundp 'org-mode) (org-mode) (fundamental-mode))
         (insert (format "#+title: Android usage, last %d days\n\n" days)
-                table)
+                (android-usage--range-table days 15)
+                "\n" (android-usage--chart-links days))
         (goto-char (point-min)))
-      (display-buffer buffer))
+      (display-buffer buffer)
+      (when (and (fboundp 'org-display-inline-images)
+                 (display-graphic-p))
+        (ignore-errors (org-display-inline-images t t))))
+    buffer))
+
+;;;###autoload
+(defun android-usage-day-report (&optional date)
+  "Show one day's (DATE, default: last day with data) report:\ntable + top-apps chart."
+  (interactive (list (read-string "Day (YYYY-MM-DD): "
+                                  (android-usage--day-string))))
+  (require 'org nil t)
+  (let* ((rows (android-usage--day-rows date))
+         (buffer (get-buffer-create "*Android Usage Day*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (if (fboundp 'org-mode) (org-mode) (fundamental-mode))
+        (insert (format "#+title: Android usage, %s\n\n"
+                        (or date "no data"))
+                (if rows
+                    (android-usage--day-table-org rows)
+                  "No usage data for this day.\n"))
+        (when rows
+          (let ((link (android-usage--write-chart
+                       "usage-top-day.svg"
+                       (android-usage--svg-hbars
+                        (android-usage--day-top date 10)
+                        (format "Top apps, %s" date)))))
+            (insert "\n#+caption: Top apps\n[[file:" link "]]\n")))
+        (goto-char (point-min)))
+      (display-buffer buffer)
+      (when (and (fboundp 'org-display-inline-images)
+                 (display-graphic-p))
+        (ignore-errors (org-display-inline-images t t))))
     buffer))
 
 ;;;###autoload
@@ -781,11 +1080,59 @@ Returns the list of day strings written."
   (interactive)
   (find-file (android-usage-org-file-path)))
 
+;;; ------------------------------------------------------------------------
+;;; Org capture integration
+;;; ------------------------------------------------------------------------
+
+;; Silence the byte compiler; org-capture defines the real defcustom.
+(defvar org-capture-templates)
+
+(defun android-usage--capture-snip ()
+  "One-line usage summary for the capture template (today)."
+  (let* ((rows (android-usage--day-rows (android-usage--day-string))))
+    (if (not rows)
+        "No usage data yet today."
+      (let* ((total (apply #'+ (mapcar (lambda (r) (nth 2 r)) rows)))
+             (top3 (seq-take (cl-sort (copy-sequence rows)
+                                      #'> :key (lambda (r) (nth 2 r)))
+                             3)))
+        (format "Total: %s | %s"
+                (android-usage--fmt-dur total)
+                (mapconcat (lambda (r)
+                             (format "%s (%s)" (nth 0 r)
+                                     (android-usage--fmt-dur (nth 2 r))))
+                           top3 ", "))))))
+
+(defcustom android-usage-capture-template
+  '("au" "Android usage snapshot" entry
+    (file (lambda () (expand-file-name "android-usage-snapshots.org"
+                                       (or (bound-and-true-p org-directory)
+                                           "~/org"))))
+    "* Usage snapshot %U\n%(android-usage--capture-snip)\n")
+  "org-capture template capturing today's usage snapshot.
+Added to `org-capture-templates' by `android-usage-setup-capture'."
+  :type 'sexp
+  :group 'android-usage)
+
+;;;###autoload
+(defun android-usage-setup-capture ()
+  "Add `android-usage-capture-template' to `org-capture-templates'."
+  (interactive)
+  (require 'org-capture)
+  (add-to-list 'org-capture-templates android-usage-capture-template)
+  (message "android-usage: capture template %S installed"
+           (car android-usage-capture-template)))
+
 ;; org-dynamic-block-insert-dblock completes over this alist (org 9.x).
 (with-eval-after-load 'org
   (when (boundp 'org-dynamic-block-alist)
     (add-to-list 'org-dynamic-block-alist
-                 '("android-usage" . android-usage-insert-block))))
+                 '("android-usage" . android-usage-insert-block))
+    (add-to-list 'org-dynamic-block-alist
+                 '("android-usage-day" . android-usage-insert-day-block))))
+
+;; README references `android-usage-import'; keep it working.
+(defalias 'android-usage-import 'android-usage-import-file)
 
 (provide 'android-usage)
 ;;; android-usage.el ends here

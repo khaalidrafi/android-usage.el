@@ -246,3 +246,194 @@ org.gnu.emacs,90000
    (let ((buf (android-usage-report 7)))
      (with-current-buffer buf
        (should (string-match-p "org\\.x" (buffer-string)))))))
+
+;;; ---------------------------------------------------------------------
+;;; Charts (v0.2)
+;;; ---------------------------------------------------------------------
+
+(ert-deftest android-usage--xml-escape ()
+  (should (equal (android-usage--xml-escape "a&b<c>\"d\"'e'")
+                 "a&amp;b&lt;c&gt;&quot;d&quot;&apos;e&apos;"))
+  (should (equal (android-usage--xml-escape "plain") "plain")))
+
+(ert-deftest android-usage--svg-hbars-renders-bars ()
+  (let ((svg (android-usage--svg-hbars
+               '(("App A" . 3600) ("App B" . 60)) "Top apps")))
+    (should (string-match-p "<svg" svg))
+    ;; background + one bar rect per row
+    (should (= (android-usage-test--occurrences "<rect" svg) 3))
+    (should (string-match-p "App A" svg))
+    (should (string-match-p "App B" svg))
+    (should (string-match-p "1:00" svg))
+    (should (string-match-p "Top apps" svg))))
+
+(ert-deftest android-usage--svg-hbars-empty ()
+  (should (string-match-p "no usage data"
+                          (android-usage--svg-hbars nil))))
+
+(ert-deftest android-usage--svg-hbars-escapes-labels ()
+  (let ((svg (android-usage--svg-hbars '(("A&B <x>" . 60)))))
+    (should (string-match-p "A&amp;B &lt;x&gt;" svg))
+    (should-not (string-match-p "A&B" svg))))
+
+(ert-deftest android-usage--svg-vbars-renders-days ()
+  (let ((svg (android-usage--svg-vbars
+              '(("2026-11-05" . 3600) ("2026-11-06" . 1800)) "Trend")))
+    (should (string-match-p "<svg" svg))
+    (should (= (android-usage-test--occurrences "<rect" svg) 3))
+    (should (string-match-p "11-05" svg))
+    (should (string-match-p "11-06" svg))
+    (should (string-match-p "1:00" svg))))
+
+(ert-deftest android-usage--range-day-totals-sums-days ()
+  (android-usage-test--with-journal
+   (android-usage--write-day
+    "2026-11-05"
+    (list (list :day "2026-11-05" :package "org.a" :label "A"
+                :seconds 3600 :opens 1)
+          (list :day "2026-11-05" :package "org.b" :label "B"
+                :seconds 7200 :opens 2)))
+   (android-usage--write-day
+    "2026-11-06"
+    (list (list :day "2026-11-06" :package "org.a" :label "A"
+                :seconds 1800 :opens 1)))
+   ;; Force both days inside a 7-day window regardless of real date.
+   (cl-letf (((symbol-function #'android-usage--read-day-tables)
+              (lambda ()
+                (list (cons "2026-11-05"
+                            (list (list "A" "org.a" 3600 1)
+                                  (list "B" "org.b" 7200 2)))
+                      (cons "2026-11-06"
+                            (list (list "A" "org.a" 1800 1)))))))
+     (should (equal (android-usage--range-day-totals 7)
+                    '(("2026-11-05" . 10800) ("2026-11-06" . 1800)))))))
+
+(ert-deftest android-usage--day-top-sorts-and-falls-back ()
+  (android-usage-test--with-journal
+   (android-usage--write-day
+    "2026-11-05"
+    (list (list :day "2026-11-05" :package "org.a" :label "A"
+                :seconds 60 :opens 1)
+          (list :day "2026-11-05" :package "org.b" :label "B"
+                :seconds 3600 :opens 2)))
+   ;; known day
+   (should (equal (android-usage--day-top "2026-11-05" 1)
+                  '(("B" . 3600))))
+   ;; unknown day falls back to last day with data
+   (should (= (length (android-usage--day-top "1999-01-01")) 2))
+   ;; empty journal -> nil
+   (cl-letf (((symbol-function #'android-usage--read-day-tables) #'ignore))
+     (should (null (android-usage--day-top nil))))))
+
+(ert-deftest android-usage--write-chart-rel-path ()
+  (android-usage-test--with-journal
+   (let ((link (android-usage--write-chart "t.svg" "<svg/>")))
+     (should (equal link "charts/t.svg"))
+     (should (file-exists-p
+              (expand-file-name "t.svg" (android-usage-chart-dir)))))))
+
+(ert-deftest android-usage--day-table-org ()
+  (let ((table (android-usage--day-table-org
+                (list (list "A" "org.a" 60 1)
+                      (list "B" "org.b" 3660 2)))))
+    (should (string-match-p "| B | org\\.b | 1:01 | 2 |" table))
+    (should (< (string-match "org\\.b" table) (string-match "org\\.a" table)))
+    (should (string-match-p "| Total | | 1:02 | 3 |" table))))
+
+(ert-deftest android-usage--dblock-with-chart-inserts-links ()
+  (android-usage-test--with-journal
+   (android-usage--write-day
+    "2026-11-05"
+    (list (list :day "2026-11-05" :package "org.x" :label "X"
+                :seconds 60 :opens 1)))
+   (with-temp-buffer
+     (org-mode)
+     (insert "#+BEGIN: android-usage :days 7 :top 5\n#+END:\n")
+     (goto-char (point-min))
+     (org-update-all-dblocks)
+     (let ((s (buffer-string)))
+       (should (string-match-p "org\\.x" s))
+       (should (string-match-p "\\[\\[file:charts/usage-trend-7d\\.svg\\]\\]" s))
+       (should (string-match-p "\\[\\[file:charts/usage-top-day\\.svg\\]\\]" s))))
+   (ignore-errors
+     (delete-directory (android-usage-chart-dir) t))))
+
+(ert-deftest android-usage--dblock-chart-off ()
+  (android-usage-test--with-journal
+   (with-temp-buffer
+     (org-mode)
+     (insert "#+BEGIN: android-usage :days 7 :top 5 :chart nil\n#+END:\n")
+     (goto-char (point-min))
+     (cl-letf (((symbol-function #'android-usage--range-table)
+                (lambda (_d _t) "| T |\n")))
+       (org-update-all-dblocks))
+     (should-not (string-match-p "file:charts" (buffer-string))))))
+
+(ert-deftest android-usage--dblock-day-writes-table-and-chart ()
+  (android-usage-test--with-journal
+   (android-usage--write-day
+    "2026-11-05"
+    (list (list :day "2026-11-05" :package "org.x" :label "X"
+                :seconds 60 :opens 1)))
+   (with-temp-buffer
+     (org-mode)
+     (insert "#+BEGIN: android-usage-day :date \"2026-11-05\"\n#+END:\n")
+     (goto-char (point-min))
+     (org-update-all-dblocks)
+     (let ((s (buffer-string)))
+       (should (string-match-p "org\\.x" s))
+       (should (string-match-p "\\[\\[file:charts/usage-top-day\\.svg\\]\\]" s))))
+   (ignore-errors
+     (delete-directory (android-usage-chart-dir) t))))
+
+(ert-deftest android-usage--day-report-buffer ()
+  (android-usage-test--with-journal
+   (android-usage--write-day
+    "2026-11-05"
+    (list (list :day "2026-11-05" :package "org.x" :label "X"
+                :seconds 60 :opens 1)))
+   (let ((buf (android-usage-day-report "2026-11-05")))
+     (with-current-buffer buf
+       (should (string-match-p "org\\.x" (buffer-string)))
+       (should (string-match-p "file:charts/usage-top-day" (buffer-string)))))))
+
+(ert-deftest android-usage--capture-snip-empty-and-data ()
+  (android-usage-test--with-journal
+   (should (equal (android-usage--capture-snip) "No usage data yet today."))
+   (android-usage--write-day
+    (android-usage--day-string)
+    (list (list :day (android-usage--day-string) :package "org.x"
+                :label "X" :seconds 60 :opens 1)))
+   (should (string-match-p "Total: 0:01 | X (0:01)"
+                           (android-usage--capture-snip)))))
+
+(ert-deftest android-usage--capture-template-shape ()
+  (should (equal (car android-usage-capture-template) "au"))
+  (should (string-match-p "android-usage--capture-snip"
+                          (nth 4 android-usage-capture-template)))
+  ;; setup-capture installs into org-capture-templates
+  (require 'org-capture)
+  (let ((org-capture-templates nil))
+    (android-usage-setup-capture)
+    (should (member android-usage-capture-template org-capture-templates))))
+
+(ert-deftest android-usage--import-alias ()
+  (should (fboundp 'android-usage-import)))
+
+(ert-deftest android-usage--range-table-shows-labels ()
+  ;; Regression (v0.1): the App column showed the package and Opens
+  ;; was printed twice; the label column must show the real label.
+  (android-usage-test--with-journal
+   (android-usage--write-day
+    "2026-11-05"
+    (list (list :day "2026-11-05" :package "org.x" :label "GNU Emacs"
+                :seconds 3660 :opens 7)))
+   (cl-letf (((symbol-function #'android-usage--read-day-tables)
+              (lambda ()
+                (list (cons "2026-11-05"
+                            (list (list "GNU Emacs" "org.x" 3660 7)))))))
+     (let ((table (android-usage--range-table 7 15)))
+       (should (string-match-p "| GNU Emacs | org\\.x | 1:01 | 7 |" table))
+       ;; label must appear in column 1, package in column 2
+       (should (< (string-match "GNU Emacs" table)
+                  (string-match "org\\.x" table)))))))
