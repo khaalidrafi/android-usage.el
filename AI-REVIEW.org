@@ -1,0 +1,50 @@
+#+title: AI-REVIEW — android-usage.el
+
+* Certification (2026-11-07)
+
+- Toolchain: emacs 30.1 (Debian trixie emacs-nox, local rebuild).
+- Byte-compile: 0 errors (=byte-compile-error-on-warn t=).
+- ERT: 22/22 pass (=test.el=).
+
+* Author self-review, round 2 (found and fixed before push)
+
+1. Column-detection keys: plain symbols in the candidate table vs
+   =:keywords= read back — no column was ever detected.
+2. =cl-loop= destructuring =(k . cands)= on 2-element entries made
+   =cands= a list wrapping the candidate list — no header ever matched.
+3. Match-data clobbering in =android-usage--read-day-tables=
+   (=string-match= mid-extraction) — crash on every journal read-back.
+4. =string<= does not exist in Elisp (void-function on range filter).
+5. Double milliseconds division (sniffed unit + per-value :auto).
+6. Label alist mutation via =assq= on a string key (setcdr on nil).
+7. Day-map alist wiring: pushed map disconnected from its day cell.
+8. =derived-mode-p= called with another buffer's mode symbol.
+9. Unused lexical variable (=any-opens=) — fatal under
+   =byte-compile-error-on-warn=.
+
+* G2 ring lane — REVIEW-INCOMPLETE (honest record)
+
+Three ring-lane attempts on 2026-11-07, all through the Owner-ordered
+lane (=agent-team-ci/scripts/g2_ring_review.py= over
+=intern_elisp.ask=):
+
+- =xingchen-agi/xing4.0-29b-a4b:free= (×2) and
+  =inclusionai/ling-3.0-flash= (×1) each wrote a full-source review
+  (13–28 KB), but none emitted the required =VERDICT:= line — free
+  cohort models cannot hold the output contract to the end.
+- Zero confirmed bugs across all three runs. The two claims made
+  (regexp =\s-= "means whitespace-then-hyphen"; RFC 4180 doubled
+  quotes "unhandled") were both incorrect, and both behaviors are
+  covered by passing ERT tests.
+- Per the lane's law (never a fabricated verdict), G2 is recorded as
+  REVIEW-INCOMPLETE. Re-run when a ring model with format discipline
+  is pooled (see cron retest 2026-11-08).
+
+* Verdicts
+
+- G1 (roles): Lead authored, self-reviewed round 2; ring reviewer
+  attempted (blocked by model format compliance, logged above).
+- G3 (cert): byte 0 errors, ERT 22/22 — PASS.
+- G4 (guard/law): commit subjects describe changes; model author
+  identity GLM-5.3-Flash + co-author trailers; guard clean; push
+  verified via ls-remote.
