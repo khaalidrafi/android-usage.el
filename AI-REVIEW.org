@@ -72,3 +72,12 @@ lane (=agent-team-ci/scripts/g2_ring_review.py= over
 - G4 (guard/law): commit subjects describe changes; model author
   identity GLM-5.3-Flash + co-author trailers; guard clean; push
   verified via ls-remote.
+** DONE superseded by org-activity — lead review pass (2026-11-15)
+   Member commits 893438f (README SUPERSEDED note) and d859152
+   (fixture dates computed, range windows never rot) close the
+   tracking side of this repo per the 2026-11-14 "Complete ALL
+   Emacs" order.  Lead review: note content verified (parser,
+   journals and charts continue in org-activity-android.el), commit
+   identity + trailers correct.  The emacs-android config now
+   imports StayFree CSVs via org-activity (1a8f423 + 5c0a636).
+   Repo left unarchived pending owner call.
