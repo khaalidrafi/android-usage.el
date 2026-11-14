@@ -18,12 +18,23 @@
          (progn ,@body)
        (ignore-errors (delete-file android-usage-org-file)))))
 
+;; Fixture days are computed at load time (2 and 3 days ago) so the
+;; "last N days" window filters can never rot as real time passes;
+;; the first version of this suite hardcoded 2026-11-05/06 and went
+;; red nine days later for exactly that reason.
+(defconst android-usage-test--day-a
+  (format-time-string "%Y-%m-%d" (time-subtract nil (* 2 86400)))
+  "Fixture day A: two days ago (inside every range window used).")
+
+(defconst android-usage-test--day-b
+  (format-time-string "%Y-%m-%d" (time-subtract nil (* 3 86400)))
+  "Fixture day B: three days ago.")
+
 (defconst android-usage-test--csv-date-col
-  "Date,Application label,Package,Duration (seconds),Opens
-2026-11-05,WhatsApp,org.whatsapp,3600,12
-2026-11-05,GNU Emacs,org.gnu.emacs,7200,40
-2026-11-06,WhatsApp,org.whatsapp,1800,5
-")
+  (concat "Date,Application label,Package,Duration (seconds),Opens\n"
+          android-usage-test--day-a ",WhatsApp,org.whatsapp,3600,12\n"
+          android-usage-test--day-a ",GNU Emacs,org.gnu.emacs,7200,40\n"
+          android-usage-test--day-b ",WhatsApp,org.whatsapp,1800,5\n"))
 
 (defconst android-usage-test--csv-stayfree-like
   "App,Package,Time,Opens
@@ -38,10 +49,10 @@ org.gnu.emacs,90000
 ")
 
 (defconst android-usage-test--json
-  "{\"days\": [
-     {\"date\": \"2026-11-05\",
+  (concat "{\"days\": [
+     {\"date\": \"" android-usage-test--day-a "\",
       \"apps\": [{\"package\": \"org.whatsapp\", \"label\": \"WhatsApp\",
-                  \"seconds\": 3600, \"opens\": 12}]}]}")
+                  \"seconds\": 3600, \"opens\": 12}]}]}"))
 
 (ert-deftest android-usage--split-csv-quoted ()
   (should (equal
@@ -95,18 +106,18 @@ org.gnu.emacs,90000
 (ert-deftest android-usage--parse-csv-date-column ()
   (let ((rows (android-usage--parse-csv android-usage-test--csv-date-col)))
     (should (= (length rows) 3))
-    (should (equal (plist-get (nth 0 rows) :day) "2026-11-05"))
+    (should (equal (plist-get (nth 0 rows) :day) android-usage-test--day-a))
     (should (equal (plist-get (nth 0 rows) :package) "org.whatsapp"))
     (should (equal (plist-get (nth 0 rows) :label) "WhatsApp"))
     (should (= (plist-get (nth 0 rows) :seconds) 3600))
     (should (= (plist-get (nth 0 rows) :opens) 12))))
 
 (ert-deftest android-usage--parse-csv-stayfree-like ()
-  (let* ((file "/tmp/stayfree-2026-11-06.csv")
+  (let* ((file (concat "/tmp/stayfree-" android-usage-test--day-b ".csv"))
          (rows (android-usage--parse-csv
                 android-usage-test--csv-stayfree-like file)))
     (should (= (length rows) 2))
-    (should (equal (plist-get (nth 0 rows) :day) "2026-11-06"))
+    (should (equal (plist-get (nth 0 rows) :day) android-usage-test--day-b))
     (should (= (plist-get (nth 0 rows) :seconds) 5400))
     (should (= (plist-get (nth 1 rows) :seconds) 2730))))
 
@@ -118,7 +129,7 @@ org.gnu.emacs,90000
 (ert-deftest android-usage--parse-json-canonical ()
   (let ((rows (android-usage--parse-json android-usage-test--json)))
     (should (= (length rows) 1))
-    (should (equal (plist-get (nth 0 rows) :day) "2026-11-05"))
+    (should (equal (plist-get (nth 0 rows) :day) android-usage-test--day-a))
     (should (equal (plist-get (nth 0 rows) :package) "org.whatsapp"))
     (should (= (plist-get (nth 0 rows) :seconds) 3600))
     (should (= (plist-get (nth 0 rows) :opens) 12))))
@@ -126,7 +137,7 @@ org.gnu.emacs,90000
 (ert-deftest android-usage--aggregate-sums-and-labels ()
   (let* ((rows (android-usage--parse-csv android-usage-test--csv-date-col))
          (days (android-usage--aggregate rows))
-         (d05 (cdr (assoc "2026-11-05" days))))
+         (d05 (cdr (assoc android-usage-test--day-a days))))
     (should (= (length days) 2))
     (should (= (car (cdr (assoc "org.whatsapp" d05))) 3600))
     (should (= (cdr (cdr (assoc "org.whatsapp" d05))) 12))
@@ -135,23 +146,23 @@ org.gnu.emacs,90000
 
 (ert-deftest android-usage--aggregate-longest-label-wins ()
   (let ((days (android-usage--aggregate
-               (list (list :day "2026-11-05" :package "org.x" :label "X"
+               (list (list :day android-usage-test--day-a :package "org.x" :label "X"
                            :seconds 10 :opens 1)
-                     (list :day "2026-11-05" :package "org.x" :label "App X"
+                     (list :day android-usage-test--day-a :package "org.x" :label "App X"
                            :seconds 20 :opens 1)))))
-    (should (equal (cdr (assoc "label:org.x" (cdr (assoc "2026-11-05" days))))
+    (should (equal (cdr (assoc "label:org.x" (cdr (assoc android-usage-test--day-a days))))
                    "App X"))))
 
 (ert-deftest android-usage--aggregate-ignores ()
   (let ((android-usage-ignore-packages '("^com\\.android\\.systemui$")))
     (let ((days (android-usage--aggregate
-                 (list (list :day "2026-11-05"
+                 (list (list :day android-usage-test--day-a
                              :package "com.android.systemui"
                              :label "System UI" :seconds 999 :opens 9)
-                       (list :day "2026-11-05" :package "org.x" :label "X"
+                       (list :day android-usage-test--day-a :package "org.x" :label "X"
                              :seconds 10 :opens 1)))))
       (should (null (assoc "com.android.systemui"
-                           (cdr (assoc "2026-11-05" days))))))))
+                           (cdr (assoc android-usage-test--day-a days))))))))
 
 (ert-deftest android-usage--day-table-sorted-with-total ()
   (let ((table (android-usage--day-table
@@ -166,26 +177,26 @@ org.gnu.emacs,90000
 
 (ert-deftest android-usage--write-day-idempotent ()
   (android-usage-test--with-journal
-   (let ((rows (list (list :day "2026-11-05" :package "org.x" :label "X"
+   (let ((rows (list (list :day android-usage-test--day-a :package "org.x" :label "X"
                            :seconds 60 :opens 1))))
-     (android-usage--write-day "2026-11-05" rows)
-     (android-usage--write-day "2026-11-05" rows)
+     (android-usage--write-day android-usage-test--day-a rows)
+     (android-usage--write-day android-usage-test--day-a rows)
      (with-temp-buffer
        (insert-file-contents android-usage-org-file)
        (let ((s (buffer-string)))
          (should (= (android-usage-test--occurrences "| App | Package |" s) 1))
          (should (= (android-usage-test--occurrences "| Total |" s) 1))
-         (should (string-match-p "^\\* 2026-11-05 " s)))))))
+         (should (string-match-p (concat "^\\* " (regexp-quote android-usage-test--day-a) " ") s)))))))
 
 (ert-deftest android-usage--read-day-tables-roundtrip ()
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.x" :label "X"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.x" :label "X"
                 :seconds 3660 :opens 3)))
    (let ((days (android-usage--read-day-tables)))
      (should (= (length days) 1))
-     (should (equal (car (car days)) "2026-11-05"))
+     (should (equal (car (car days)) android-usage-test--day-a))
      (let ((row (cadr (car days))))
        (should (equal (nth 0 row) "X"))
        (should (equal (nth 1 row) "org.x"))
@@ -214,8 +225,9 @@ org.gnu.emacs,90000
      (with-temp-file old (insert "foo,bar\n1,2\n"))
      (sleep-for 0 20)
      (with-temp-file new (insert android-usage-test--csv-date-col))
+     ;; days come back date-ascending (day-b is older than day-a)
      (should (equal (android-usage--pull-latest-file)
-                    '("2026-11-05" "2026-11-06")))
+                    (list android-usage-test--day-b android-usage-test--day-a)))
      (should (file-exists-p android-usage-org-file))
      (delete-directory dir t))))
 
@@ -240,8 +252,8 @@ org.gnu.emacs,90000
 (ert-deftest android-usage--report-buffer ()
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.x" :label "X"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.x" :label "X"
                 :seconds 60 :opens 1)))
    (let ((buf (android-usage-report 7)))
      (with-current-buffer buf
@@ -278,46 +290,46 @@ org.gnu.emacs,90000
 
 (ert-deftest android-usage--svg-vbars-renders-days ()
   (let ((svg (android-usage--svg-vbars
-              '(("2026-11-05" . 3600) ("2026-11-06" . 1800)) "Trend")))
+              `((,android-usage-test--day-a . 3600) (,android-usage-test--day-b . 1800)) "Trend")))
     (should (string-match-p "<svg" svg))
     (should (= (android-usage-test--occurrences "<rect" svg) 3))
-    (should (string-match-p "11-05" svg))
-    (should (string-match-p "11-06" svg))
+    (should (string-match-p (substring android-usage-test--day-a 5) svg))
+    (should (string-match-p (substring android-usage-test--day-b 5) svg))
     (should (string-match-p "1:00" svg))))
 
 (ert-deftest android-usage--range-day-totals-sums-days ()
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.a" :label "A"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.a" :label "A"
                 :seconds 3600 :opens 1)
-          (list :day "2026-11-05" :package "org.b" :label "B"
+          (list :day android-usage-test--day-a :package "org.b" :label "B"
                 :seconds 7200 :opens 2)))
    (android-usage--write-day
-    "2026-11-06"
-    (list (list :day "2026-11-06" :package "org.a" :label "A"
+    android-usage-test--day-b
+    (list (list :day android-usage-test--day-b :package "org.a" :label "A"
                 :seconds 1800 :opens 1)))
    ;; Force both days inside a 7-day window regardless of real date.
    (cl-letf (((symbol-function #'android-usage--read-day-tables)
               (lambda ()
-                (list (cons "2026-11-05"
+                (list (cons android-usage-test--day-a
                             (list (list "A" "org.a" 3600 1)
                                   (list "B" "org.b" 7200 2)))
-                      (cons "2026-11-06"
+                      (cons android-usage-test--day-b
                             (list (list "A" "org.a" 1800 1)))))))
      (should (equal (android-usage--range-day-totals 7)
-                    '(("2026-11-05" . 10800) ("2026-11-06" . 1800)))))))
+                    `((,android-usage-test--day-b . 1800) (,android-usage-test--day-a . 10800)))))))
 
 (ert-deftest android-usage--day-top-sorts-and-falls-back ()
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.a" :label "A"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.a" :label "A"
                 :seconds 60 :opens 1)
-          (list :day "2026-11-05" :package "org.b" :label "B"
+          (list :day android-usage-test--day-a :package "org.b" :label "B"
                 :seconds 3600 :opens 2)))
    ;; known day
-   (should (equal (android-usage--day-top "2026-11-05" 1)
+   (should (equal (android-usage--day-top android-usage-test--day-a 1)
                   '(("B" . 3600))))
    ;; unknown day falls back to last day with data
    (should (= (length (android-usage--day-top "1999-01-01")) 2))
@@ -343,8 +355,8 @@ org.gnu.emacs,90000
 (ert-deftest android-usage--dblock-with-chart-inserts-links ()
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.x" :label "X"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.x" :label "X"
                 :seconds 60 :opens 1)))
    (with-temp-buffer
      (org-mode)
@@ -372,12 +384,12 @@ org.gnu.emacs,90000
 (ert-deftest android-usage--dblock-day-writes-table-and-chart ()
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.x" :label "X"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.x" :label "X"
                 :seconds 60 :opens 1)))
    (with-temp-buffer
      (org-mode)
-     (insert "#+BEGIN: android-usage-day :date \"2026-11-05\"\n#+END:\n")
+     (insert (format "#+BEGIN: android-usage-day :date %S\n#+END:\n" android-usage-test--day-a))
      (goto-char (point-min))
      (org-update-all-dblocks)
      (let ((s (buffer-string)))
@@ -389,10 +401,10 @@ org.gnu.emacs,90000
 (ert-deftest android-usage--day-report-buffer ()
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.x" :label "X"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.x" :label "X"
                 :seconds 60 :opens 1)))
-   (let ((buf (android-usage-day-report "2026-11-05")))
+   (let ((buf (android-usage-day-report android-usage-test--day-a)))
      (with-current-buffer buf
        (should (string-match-p "org\\.x" (buffer-string)))
        (should (string-match-p "file:charts/usage-top-day" (buffer-string)))))))
@@ -425,12 +437,12 @@ org.gnu.emacs,90000
   ;; was printed twice; the label column must show the real label.
   (android-usage-test--with-journal
    (android-usage--write-day
-    "2026-11-05"
-    (list (list :day "2026-11-05" :package "org.x" :label "GNU Emacs"
+    android-usage-test--day-a
+    (list (list :day android-usage-test--day-a :package "org.x" :label "GNU Emacs"
                 :seconds 3660 :opens 7)))
    (cl-letf (((symbol-function #'android-usage--read-day-tables)
               (lambda ()
-                (list (cons "2026-11-05"
+                (list (cons android-usage-test--day-a
                             (list (list "GNU Emacs" "org.x" 3660 7)))))))
      (let ((table (android-usage--range-table 7 15)))
        (should (string-match-p "| GNU Emacs | org\\.x | 1:01 | 7 |" table))
