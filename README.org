@@ -117,3 +117,13 @@ of it went.
 =make compile= (byte-compile, warnings as errors) and =make test=
 (ERT) are clean on Emacs 30.1.  The package is Android-compatible by
 construction: no JNI, no subprocesses, no external dependencies.
+
+* SUPERSEDED (2026-11-14)
+
+This package is superseded by =org-activity=
+(https://github.com/khaalidrafi/org-activity), the cross-platform
+ActivityWatch alternative for Emacs on Linux and Android: its
+=org-activity-android.el= module continues this codebase (same
+parser, same journals, same charts) inside a package that also
+tracks live Emacs activity and, on Linux, the system foreground
+window.  No further development here; fix forward in org-activity.
