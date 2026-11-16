@@ -1,5 +1,18 @@
 #+title: android-usage.el — Android screen time in Org
 
+* DEPRECATED — merged into =org-activity=
+
+This package is frozen.  The whole module (StayFree CSV/JSON import,
+column detection, per-day tables, the =#+BEGIN: android-usage= dynamic
+block) now lives in
+[[https://github.com/khaalidrafi/org-activity][org-activity]] as
+=org-activity-android.el= — a superset of this file, same parsing
+functions under the =org-activity-android-= prefix, plus the day dblock.
+
+Nothing here is deleted, so old clones keep working.  Do not add features
+and do not file fixes against this repo: they go to =org-activity=.
+
+
 Pull Android's *Usage Access* data (the same per-app usage the system
 gives StayFree) into a plain Org file: one table per day, a
 StayFree-style top-apps report, and a =#+BEGIN: android-usage=
