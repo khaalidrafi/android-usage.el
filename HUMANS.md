@@ -11,6 +11,9 @@ pulls Android's Usage Access data (the same per-app screen time the
 system shows StayFree) into a plain Org file: one table per day, a
 StayFree-style top-apps report, and a `#+BEGIN: android-usage`
 dynamic block with SVG charts. Everything stays on the device.
+STATUS 2026-11-18: DEPRECATED - the CSV/JSON import lane now lives
+in the successor repo `org-activity`, which also carries the native
+patched-Emacs lane; this repo is kept for history.
 
 The bridge, stated honestly in the README: stock Emacs on Android has
 no Java interop, so Elisp cannot call UsageStatsManager. One export
